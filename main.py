@@ -162,43 +162,37 @@ def solve_sudoku_image(
 
 
 def _render_solution_on_warped(
-    warped_bgr: np.ndarray,
-    grid: GridResult,
-    ocr_res: OCRGridResult,
-    solved_grid: List[List[Optional[int]]],
+    warped_bgr,
+    grid,
+    ocr_res,
+    solved_grid,
     *,
     color_given=(180, 180, 255),
     color_new=(60, 220, 60),
-) -> np.ndarray:
-    """
-    Draws both givens (in one color) and newly solved digits (in another) on the warped board.
-    """
+):
     vis = warped_bgr.copy()
-    H, W = vis.shape[:2]
-
-    # Build quick lookup of given/blocked
-    given_mask = {
-        (c.row, c.col): (c.digit if c.digit is not None else None)
-        for c in ocr_res.cells
-        if c.status == "given"
-    }
-    blocked_mask = {(c.row, c.col) for c in ocr_res.cells if c.status == "blocked"}
-
-    # Font sizing based on cell size
     avg_cell_w = float(np.mean(np.diff(grid.x_lines)))
     font_scale = max(0.5, min(2.5, avg_cell_w / 55.0))
     thickness = max(1, int(round(avg_cell_w / 35.0)))
 
+    # quick lookups
+    given_set = {(c.row, c.col) for c in ocr_res.cells if c.status == "given"}
+    blocked_set = {(c.row, c.col) for c in ocr_res.cells if c.status == "blocked"}
+    # ink map from detect_cells stats
+    ink_map = {(c.bbox.row, c.bbox.col): c.stats.ink_ratio for c in grid.cells}
+    # threshold for “there is ink” (match your OCR empty threshold)
+    OCCUPIED_INK = 0.08
+
     for r in range(grid.rows):
         y0 = int(round(grid.y_lines[r]))
         y1 = int(round(grid.y_lines[r + 1]))
-        cy = int(round((y0 + y1) / 2))
+        cy = (y0 + y1) // 2
         for c in range(grid.cols):
             x0 = int(round(grid.x_lines[c]))
             x1 = int(round(grid.x_lines[c + 1]))
-            cx = int(round((x0 + x1) / 2))
-            if (r, c) in blocked_mask:
-                # draw a filled square indicator (optional)
+            cx = (x0 + x1) // 2
+
+            if (r, c) in blocked_set:
                 cv2.rectangle(vis, (x0 + 3, y0 + 3), (x1 - 3, y1 - 3), (50, 50, 50), -1)
                 continue
 
@@ -206,17 +200,19 @@ def _render_solution_on_warped(
             if val is None:
                 continue
 
-            txt = str(val)
-            # Choose color depending on whether it was a given
-            col = color_given if (r, c) in given_mask else color_new
+            # NEW RULE: if the original cell had noticeable ink but was NOT confirmed as a given,
+            # do NOT draw a new digit on top (avoid visual overwrite of mis-OCR'd givens).
+            orig_has_ink = ink_map.get((r, c), 0.0) > OCCUPIED_INK
+            is_given = (r, c) in given_set
+            if orig_has_ink and not is_given:
+                continue  # skip drawing here
 
-            # Center text
-            ((tw, th), baseline) = cv2.getTextSize(
+            txt = str(val)
+            color = color_given if is_given else color_new
+            (tw, th), baseline = cv2.getTextSize(
                 txt, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness
             )
-            tx = cx - tw // 2
-            ty = cy + th // 2
-            # Optional shadow for contrast
+            tx, ty = cx - tw // 2, cy + th // 2
             cv2.putText(
                 vis,
                 txt,
@@ -233,11 +229,10 @@ def _render_solution_on_warped(
                 (tx, ty),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 font_scale,
-                col,
+                color,
                 thickness,
                 cv2.LINE_AA,
             )
-
     return vis
 
 

@@ -1,10 +1,10 @@
 from __future__ import annotations
-import os, time, math
+import time
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 
-from cnn.model import SmallSudokuCNN, NUM_CLASSES
+from cnn.model import SmallSudokuCNN
 from cnn.dataset import SudokuCellsSynthetic
 
 
@@ -18,16 +18,27 @@ def train(
     device: str = "cpu",
 ):
     ds = SudokuCellsSynthetic(side=side, length=total_samples)
-    # 90/10 split
     n_val = max(2000, total_samples // 10)
     n_train = total_samples - n_val
     train_ds, val_ds = random_split(ds, [n_train, n_val])
 
+    use_cuda = device.startswith("cuda")
+    pin = bool(use_cuda)
+    workers = 0 if not use_cuda else 2  # mac/CPU: 0 workers is safest
+
     train_loader = DataLoader(
-        train_ds, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=workers,
+        pin_memory=pin,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True
+        val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=workers,
+        pin_memory=pin,
     )
 
     model = SmallSudokuCNN().to(device)
@@ -35,26 +46,28 @@ def train(
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
     criterion = nn.CrossEntropyLoss()
 
-    scaler = torch.cuda.amp.GradScaler(
-        enabled=(device.startswith("cuda") or device == "mps")
-    )
+    scaler = torch.amp.GradScaler("cuda") if use_cuda else None
 
-    best_val = 0.0
     for ep in range(1, epochs + 1):
         model.train()
         tot, correct, seen = 0.0, 0, 0
         t0 = time.time()
         for x, y in train_loader:
-            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+            x, y = x.to(device), y.to(device)
             opt.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast(
-                enabled=(device.startswith("cuda") or device == "mps")
-            ):
+            if use_cuda:
+                with torch.amp.autocast("cuda"):
+                    logits = model(x)
+                    loss = criterion(logits, y)
+                scaler.scale(loss).backward()
+                scaler.step(opt)
+                scaler.update()
+            else:
                 logits = model(x)
                 loss = criterion(logits, y)
-            scaler.scale(loss).backward()
-            scaler.step(opt)
-            scaler.update()
+                loss.backward()
+                opt.step()
+
             pred = logits.argmax(1)
             correct += (pred == y).sum().item()
             seen += y.numel()
@@ -81,10 +94,11 @@ def train(
             f"[ep {ep}/{epochs}] loss {train_loss:.4f} acc {train_acc:.3f} | val {val_loss:.4f} acc {val_acc:.3f} | {dt:.1f}s"
         )
 
-        if val_acc > best_val:
-            best_val = val_acc
+        # save best
+        if ep == 1 or val_acc >= getattr(train, "_best", 0.0):
             torch.save({"model": model.state_dict(), "side": side}, out_path)
-            print(f"  saved best to {out_path} (val_acc={best_val:.3f})")
+            train._best = val_acc
+            print(f"  saved best to {out_path} (val_acc={val_acc:.3f})")
 
     print("Done.")
 
@@ -99,7 +113,7 @@ if __name__ == "__main__":
     ap.add_argument("--batch", type=int, default=128)
     ap.add_argument("--epochs", type=int, default=5)
     ap.add_argument("--lr", type=float, default=1e-3)
-    ap.add_argument("--device", default="cpu", help="cpu | cuda | mps")
+    ap.add_argument("--device", default="cpu", help="cpu | cuda")
     args = ap.parse_args()
     train(
         args.out, args.side, args.samples, args.batch, args.epochs, args.lr, args.device

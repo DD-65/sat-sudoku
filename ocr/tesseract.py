@@ -38,11 +38,9 @@ class OcrOptions:
     """
 
     # Classification thresholds using CellStats (from detect_cells)
-    blocked_ink_ratio: float = (
-        0.68  # >= this -> consider "blocked" (filled/shaded cell)
-    )
-    empty_ink_ratio: float = 0.08  # <= this -> consider "empty" (no content)
-    min_digit_conf: float = 55.0  # accept digit if best conf >= this
+    blocked_ink_ratio: float = 0.4  # >= this -> consider "blocked" (filled/shaded cell)
+    empty_ink_ratio: float = 0.03  # <= this -> consider "empty" (no content)
+    min_digit_conf: float = 50.0  # accept digit if best conf >= this
 
     # Preprocessing for OCR
     inner_margin_frac: float = 0.12  # crop border to avoid grid lines
@@ -68,6 +66,40 @@ class OcrOptions:
 
     # Collect debug crops and per-variant images
     collect_debug: bool = False
+
+
+def _prep_for_ocr(cell_img, out_size: int = 64) -> np.ndarray:
+    """
+    Preprocess a cell image for Tesseract:
+    - grayscale, blur
+    - adaptive threshold (invert: digits white on black background)
+    - crop tight to ink
+    - pad to square
+    - resize to out_size
+    Returns a binarized uint8 image.
+    """
+    gray = cv2.cvtColor(cell_img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+
+    # Adaptive threshold for uneven lighting
+    th = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 7
+    )
+
+    coords = cv2.findNonZero(th)
+    if coords is None:
+        return cv2.resize(th, (out_size, out_size), interpolation=cv2.INTER_AREA)
+    x, y, w, h = cv2.boundingRect(coords)
+    roi = th[y : y + h, x : x + w]
+
+    # pad to square
+    s = max(w, h)
+    square = np.zeros((s, s), np.uint8)
+    square[:, :] = 0
+    square[(s - h) // 2 : (s - h) // 2 + h, (s - w) // 2 : (s - w) // 2 + w] = roi
+
+    # resize
+    return cv2.resize(square, (out_size, out_size), interpolation=cv2.INTER_AREA)
 
 
 # ---------- Public API ----------
@@ -111,47 +143,46 @@ def ocr_digits_from_grid(
 # ---------- Core logic ----------
 
 
-def _read_single_cell(
-    cell: Cell, opts: OcrOptions
-) -> Tuple[str, Optional[int], float, str, Dict[str, np.ndarray]]:
-    """
-    Returns (status, digit, conf, raw_text, debug_images).
-    """
-    debug_imgs: Dict[str, np.ndarray] = {}
-    # Quick triage using precomputed stats from detect_cells
-    # (robust to borders because stats use inner ROI)
-    s: CellStats = cell.stats
+def _read_single_cell(cell, opts):
+    debug_imgs = {}
+    s = cell.stats
+
+    # 1. Heuristics: blocked vs empty by ink_ratio
     if s.ink_ratio >= opts.blocked_ink_ratio:
         return "blocked", None, -1.0, "", debug_imgs
     if s.ink_ratio <= opts.empty_ink_ratio:
         return "empty", None, -1.0, "", debug_imgs
 
-    # Prepare a clean, centered, normalized grayscale crop for OCR
-    g = _prep_cell_for_ocr(
-        cell.image, opts.inner_margin_frac, opts.resize_px, opts.pad_px
-    )
+    # 2. Preprocess
+    g = _prep_for_ocr(cell.image, out_size=64)
+    if opts.collect_debug:
+        debug_imgs["prep"] = cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
 
-    # Run several preprocessing "variants" to coax Tesseract; pick best by conf
-    best_conf = -1.0
-    best_text = ""
-    best_digit: Optional[int] = None
+    # 3. Try multiple configs
+    configs = [
+        "--oem 1 --psm 10 -c tessedit_char_whitelist=123456789",
+        "--oem 1 --psm 6 -c tessedit_char_whitelist=123456789",
+        "--oem 1 --psm 13 -c tessedit_char_whitelist=123456789",
+    ]
 
-    for vname, g_proc in _generate_variants(g, opts.try_variants):
-        text, conf = _tesseract_single_char(g_proc, opts)
-        if conf > best_conf:
-            best_conf = conf
-            best_text = text
-            best_digit = _postprocess_digit(text)
-        if opts.collect_debug:
-            debug_imgs[vname] = _to_bgr(g_proc)
+    best_digit, best_conf, best_text = None, -1.0, ""
+    for cfg in configs:
+        data = pytesseract.image_to_data(
+            g, config=cfg, output_type=pytesseract.Output.DICT
+        )
+        if len(data["text"]) == 0:
+            continue
+        txt = data["text"][0].strip()
+        conf = float(data["conf"][0]) if data["conf"][0] != "-1" else -1.0
+        if txt and txt in "123456789" and conf > best_conf:
+            best_digit, best_conf, best_text = int(txt), conf, txt
 
-    # Threshold acceptance
+    # 4. Decide outcome
     if best_digit is not None and best_conf >= opts.min_digit_conf:
         return "given", best_digit, best_conf, best_text, debug_imgs
 
-    # If low confidence but looks like content (between empty/block thresholds), mark empty for safety
-    # (You can also return status="given" with digit=None to signal "uncertain".)
-    return "empty", None, best_conf, best_text, debug_imgs
+    # fallback
+    return "occupied_uncertain", None, best_conf, best_text, debug_imgs
 
 
 # ---------- OCR helpers ----------

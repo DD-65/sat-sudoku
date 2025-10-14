@@ -1,13 +1,16 @@
 import random
+import argparse
 from itertools import islice
+from datetime import datetime
 
 try:
     from PIL import Image, ImageDraw, ImageFont
+    
 except ImportError:
-    print("Pillow library not found. Please install it with 'pip install Pillow'")
+    print("Pillow library not found.")
     Image = None
 
-def generate_sudoku(base=3):
+def generate_sudoku(base=3, difficulty=0.5):
     side = base * base
 
     # pattern for a baseline valid solution
@@ -28,7 +31,7 @@ def generate_sudoku(base=3):
 
     # remove some of the numbers to create the puzzle
     squares = side * side
-    empties = squares * 3 // 4
+    empties = int(squares * (0.6 + 0.37 * difficulty))
     puzzle_board = [row[:] for row in solution_board]
     for p in random.sample(range(squares), empties):
         puzzle_board[p // side][p % side] = 0
@@ -42,10 +45,10 @@ def generate_sudoku(base=3):
         if len(solved) == 0:
             # This should not happen with the current logic, but as a safeguard
             # if the puzzle is unsolvable, we add a number back.
-            empties = [i for i, n in enumerate(sum(puzzle_board, [])) if n == 0]
-            if not empties:
+            empties_list = [i for i, n in enumerate(sum(puzzle_board, [])) if n == 0]
+            if not empties_list:
                 break # Should not be reached
-            p = random.choice(empties)
+            p = random.choice(empties_list)
             puzzle_board[p//side][p%side] = solution_board[p//side][p%side]
             continue
 
@@ -161,7 +164,7 @@ def save_board_as_image(board, filename="sudoku_puzzle.png"):
     draw = ImageDraw.Draw(img)
 
     try:
-        font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", int(cell_size * 0.55))
+        font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", int(cell_size * 0.8))
     except IOError:
         font = ImageFont.load_default()
 
@@ -190,6 +193,14 @@ def save_board_as_image(board, filename="sudoku_puzzle.png"):
     print(f"Sudoku puzzle saved as {filename}")
 
 if __name__ == "__main__":
-    puzzle = generate_sudoku()
+    parser = argparse.ArgumentParser(description="Generate a Sudoku puzzle.")
+    parser.add_argument("--difficulty", type=float, default=0.5, help="A float between 0 (easy) and 1 (hard).")
+    args = parser.parse_args()
+
+    puzzle = generate_sudoku(difficulty=args.difficulty)
+    
+    timestamp = datetime.now().strftime("%H%M%S")
+    filename = f"sudoku_puzzle_{timestamp}.png"
+    
     #print_board(puzzle)
-    save_board_as_image(puzzle)
+    save_board_as_image(puzzle, filename=filename)

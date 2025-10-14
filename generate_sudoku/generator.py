@@ -31,7 +31,7 @@ def generate_sudoku(base=3, difficulty=0.5):
 
     # remove some of the numbers to create the puzzle
     squares = side * side
-    empties = int(squares * (0.6 + 0.37 * difficulty))
+    empties = int(squares * (0.6 + 0.2 * difficulty))
     puzzle_board = [row[:] for row in solution_board]
     for p in random.sample(range(squares), empties):
         puzzle_board[p // side][p % side] = 0
@@ -189,7 +189,7 @@ def save_board_as_image(board, filename="sudoku_puzzle.png"):
                 y = margin + r * cell_size + (cell_size - text_height) / 2 - bbox[1]
                 draw.text((x, y), text, fill="black", font=font)
 
-    img.save(filename)
+    img.save(f"img/{filename}")
     print(f"Sudoku puzzle saved as {filename}")
 
 if __name__ == "__main__":
@@ -200,7 +200,7 @@ if __name__ == "__main__":
     puzzle = generate_sudoku(difficulty=args.difficulty)
     
     timestamp = datetime.now().strftime("%H%M%S")
-    filename = f"sudoku_puzzle_{timestamp}.png"
+    filename = f"sudoku_puzzle_{args.difficulty}_{timestamp}.png"
     
     #print_board(puzzle)
     save_board_as_image(puzzle, filename=filename)

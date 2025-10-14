@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
+import cv2
 import numpy as np
-from doctr.models import ocr_predictor
+from doctr.models import recognition_predictor
 
-from vision.detect_cells import GridResult
+from vision.detect_cells import GridResult, Cell
 
 
 # ---------- Public dataclasses ----------
@@ -37,12 +38,30 @@ class OcrOptions:
     """
 
     # Classification thresholds using CellStats (from detect_cells)
-    blocked_ink_ratio: float = 0.4  # >= this -> consider "blocked" (filled/shaded cell)
-    empty_ink_ratio: float = 0.04  # <= this -> consider "empty" (no content)
-    min_digit_conf: float = 0.41  # accept digit if best conf >= this
+    blocked_ink_ratio: float = 0.5  # >= this -> consider "blocked" (filled/shaded cell)
+    empty_ink_ratio: float = 0.05  # <= this -> consider "empty" (no content)
+    min_digit_conf: float = 0.7  # accept digit if best conf >= this
 
     # Collect debug crops
     collect_debug: bool = False
+
+
+# ---------- Preprocessing ----------
+
+
+def _preprocess_for_doctr(img: np.ndarray, size: int = 64, pad: int = 5) -> np.ndarray:
+    """
+    Pads and resizes a cell image to a fixed square for consistent OCR.
+    """
+    # 1. Add a white border (padding)
+    img = cv2.copyMakeBorder(
+        img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(255, 255, 255)
+    )
+
+    # 2. Resize to a fixed square
+    img = cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
+
+    return img
 
 
 # ---------- Public API ----------
@@ -56,17 +75,22 @@ def ocr_digits_from_grid(
     Classifies each cell as "given", "empty", or "blocked".
     """
     dbg: Dict[str, np.ndarray] = {}
-    model = ocr_predictor(pretrained=True)
+    # Load a RECOGNITION-only predictor
+    model = recognition_predictor(arch="vitstr_small", pretrained=True)
+
+    # Preprocess cell images and collect them into a batch
+    cell_images = [_preprocess_for_doctr(cell.image) for cell in grid.cells]
+
+    # Run recognition on all cell images in a single batch
+    # The model returns a list of (word, confidence) tuples
+    predictions = model(cell_images)
 
     ocr_cells: List[OCRCellReading] = []
-    # Extract cell images into a batch
-    cell_images = [cell.image for cell in grid.cells]
-
-    # Run OCR on all cell images in a single batch
-    results = model(cell_images)
-
     for i, cell in enumerate(grid.cells):
-        status, digit, conf, raw = _read_single_cell(cell, results.pages[i], opts)
+        # The prediction for this cell is at the same index
+        word, confidence = predictions[i]
+        status, digit, conf, raw = _read_single_cell(cell, word, confidence, opts)
+
         ocr_cells.append(
             OCRCellReading(
                 row=cell.bbox.row,
@@ -78,21 +102,23 @@ def ocr_digits_from_grid(
             )
         )
         if opts.collect_debug:
-            # Add debug images if any
-            pass
+            dbg[f"r{cell.bbox.row}c{cell.bbox.col}_prep"] = cell_images[i]
 
     return OCRGridResult(
-        rows=grid.rows,
-        cols=grid.cols,
-        cells=ocr_cells,
-        debug=dbg,
+        rows=grid.rows, cols=grid.cols, cells=ocr_cells, debug=dbg
     )
 
 
 # ---------- Core logic ----------
 
 
-def _read_single_cell(cell, page_result, opts):
+def _read_single_cell(
+    cell: Cell, word: str, confidence: float, opts: OcrOptions
+) -> Tuple[str, Optional[int], float, str]:
+    """
+    Determines the status of a cell based on ink ratio and the direct
+    output from a recognition model.
+    """
     s = cell.stats
 
     # 1. Heuristics: blocked vs empty by ink_ratio
@@ -101,19 +127,15 @@ def _read_single_cell(cell, page_result, opts):
     if s.ink_ratio <= opts.empty_ink_ratio:
         return "empty", None, -1.0, ""
 
-    # 2. Process OCR results
+    # 2. Process recognition results
     best_digit, best_conf, best_text = None, -1.0, ""
-
-    if page_result.blocks:
-        for block in page_result.blocks:
-            for line in block.lines:
-                for word in line.words:
-                    if word.value.isdigit() and word.confidence > best_conf:
-                        d = int(word.value)
-                        if d != 0:  # Sudoku digits 1..9
-                            best_digit = d
-                            best_conf = word.confidence
-                            best_text = word.value
+    # The word and confidence are passed in directly
+    if word.isdigit():
+        d = int(word)
+        if d != 0:  # Sudoku digits 1..9
+            best_digit = d
+            best_conf = confidence
+            best_text = word
 
     # 3. Decide outcome
     if best_digit is not None and best_conf >= opts.min_digit_conf:

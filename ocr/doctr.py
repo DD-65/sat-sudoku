@@ -38,8 +38,8 @@ class OcrOptions:
 
     # Classification thresholds using CellStats (from detect_cells)
     blocked_ink_ratio: float = 0.4  # >= this -> consider "blocked" (filled/shaded cell)
-    empty_ink_ratio: float = 0.03  # <= this -> consider "empty" (no content)
-    min_digit_conf: float = 0.5  # accept digit if best conf >= this
+    empty_ink_ratio: float = 0.04  # <= this -> consider "empty" (no content)
+    min_digit_conf: float = 0.41  # accept digit if best conf >= this
 
     # Collect debug crops
     collect_debug: bool = False

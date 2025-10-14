@@ -11,7 +11,7 @@ import numpy as np
 
 from vision.detect_board import detect_board, DetectorOptions
 from vision.detect_cells import detect_cells, GridOptions, GridResult
-from ocr.tesseract import ocr_digits_from_grid, OcrOptions, OCRGridResult
+from ocr.doctr import ocr_digits_from_grid, OcrOptions, OCRGridResult
 from sat.builder import build_sudoku_cnf, write_dimacs, summarize_problem, SudokuSpec
 from sat.runner import run_kissat_on_cnf, SAT, SolveResult
 
@@ -22,7 +22,7 @@ from sat.runner import run_kissat_on_cnf, SAT, SolveResult
 def solve_sudoku_image(
     image_path: str,
     *,
-    kissat_path: str = "kissat",
+    kissat_path: str = "/Users/daniel/Downloads/kissat-4.0.3-apple-arm64",
     expected_rows: Optional[int] = 9,
     expected_cols: Optional[int] = 9,
     box_spec: Optional[Tuple[int, int]] = (3, 3),  # (p, q) for standard 9x9
@@ -281,7 +281,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     ap.add_argument("image", help="Path to Sudoku photo")
     ap.add_argument(
         "--kissat",
-        default="kissat",
+        default="/Users/daniel/Downloads/kissat-4.0.3-apple-arm64",
         help="Path to kissat binary (default: 'kissat' in PATH)",
     )
     ap.add_argument("--rows", type=int, default=9, help="Expected rows (default: 9)")

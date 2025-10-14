@@ -46,7 +46,7 @@ def run_kissat_on_cnf(
     spec: SudokuSpec,
     blocked: Iterable[Tuple[int, int]],
     *,
-    kissat_path: str = "/Users/danielcairoli/Downloads/kissat-4.0.3-apple-arm64",
+    kissat_path: str = "/Users/daniel/Downloads/kissat-4.0.3-apple-arm64",
     extra_args: Optional[Sequence[str]] = None,
     timeout_sec: Optional[float] = None,
     keep_files: bool = False,

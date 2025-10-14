@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Set
 
-from ocr.tesseract import OCRGridResult, OCRCellReading
+from ocr.doctr import OCRGridResult, OCRCellReading
 
 
 # ---------- Public dataclasses ----------
@@ -107,7 +107,7 @@ def build_sudoku_cnf(
     Build a DIMACS CNF for the Sudoku described by the OCR output.
 
     Args:
-        ocr: OCRGridResult from ocr/tesseract.py
+        ocr: OCRGridResult from ocr/doctr.py
         box_spec: optional (p,q) subgrid shape. If None, factor N automatically.
         opts: encoding options.
 

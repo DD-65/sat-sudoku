@@ -21,3 +21,6 @@ Here's an example of the solver in action:
 **Output Image:**
 
 ![Output Image](solution.png)
+
+---
+Also has a Sudoku creation feature using the Algorithm outlined in [this Stack Overflow post](https://stackoverflow.com/questions/45471152/how-to-create-a-sudoku-puzzle-in-python)

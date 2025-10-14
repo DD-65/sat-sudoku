@@ -29,7 +29,7 @@ def generate_sudoku(base=3, difficulty=0.5):
     # produce board using randomized baseline pattern
     solution_board = [[nums[pattern(r, c)] for c in cols] for r in rows]
 
-    # remove some of the numbers to create the puzzle
+    # remove some of the numbers to make it difficult
     squares = side * side
     empties = int(squares * (0.6 + 0.2 * difficulty))
     puzzle_board = [row[:] for row in solution_board]

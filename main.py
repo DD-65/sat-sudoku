@@ -4,6 +4,7 @@ import os
 import sys
 import json
 import argparse
+import time
 from typing import List, Tuple, Optional
 
 import cv2
@@ -29,11 +30,12 @@ def solve_sudoku_image(
     timeout_sec: Optional[float] = 10.0,
     out_dir: str = "out",
     save_debug: bool = True,
+    timing_debug: bool = True,
     keep_solver_files: bool = False,
 ) -> dict:
     """
-    High-level pipeline: image -> warped board -> cells -> OCR -> CNF -> Kissat -> solution.
-
+    pipeline: image -> warped board -> cells -> OCR -> CNF -> Kissat -> solution.
+    
     Returns a dict with key artifacts and file paths (if saved).
     Raises RuntimeError on fatal errors.
     """
@@ -42,10 +44,15 @@ def solve_sudoku_image(
 
     os.makedirs(out_dir, exist_ok=True)
 
+    starttime = time.time()
+
     # 1) Read image
     img_bgr = cv2.imread(image_path, cv2.IMREAD_COLOR)
     if img_bgr is None:
         raise RuntimeError(f"Failed to read image: {image_path}")
+    
+    time_after_image_read = time.time()
+    image_read_duration = time.time() - starttime
 
     # 2) Detect board & warp
     det_opts = DetectorOptions(collect_debug=save_debug)
@@ -53,6 +60,9 @@ def solve_sudoku_image(
     warped_path = os.path.join(out_dir, "warped.png")
     if save_debug:
         cv2.imwrite(warped_path, warped_bgr)
+
+    time_after_board_dec = time.time()
+    board_detection_duration = time_after_board_dec - time_after_image_read
 
     # 3) Detect cells / grid lines on the warped board
     grid_opts = GridOptions(
@@ -62,9 +72,15 @@ def solve_sudoku_image(
     )
     grid: GridResult = detect_cells(warped_bgr, grid_opts)
 
+    time_after_cell_dec = time.time()
+    cell_detection_duration = time_after_cell_dec - time_after_board_dec
+
     # 4) OCR givens/blocked
     ocr_opts = OcrOptions(collect_debug=save_debug)
     ocr_res: OCRGridResult = ocr_digits_from_grid(grid, ocr_opts)
+
+    time_after_ocr = time.time()
+    ocr_duration = time_after_ocr - time_after_cell_dec
 
     # 5) Build CNF (subgrid shape)
     N = ocr_res.rows
@@ -73,9 +89,15 @@ def solve_sudoku_image(
         ocr_res, box_spec=box_spec if box_spec else None
     )
 
+    time_after_cnf = time.time()
+    cnf_build_duration = time_after_cnf - time_after_ocr
+
     # 6) Optionally write CNF for inspection
     cnf_path = os.path.join(out_dir, "sudoku.cnf")
     write_dimacs(cnf, cnf_path)
+
+    time_after_cnf_write = time.time()
+    cnf_write_duration = time_after_cnf_write - time_after_cnf
 
     # 7) Run Kissat
     solve_res: SolveResult = run_kissat_on_cnf(
@@ -90,6 +112,9 @@ def solve_sudoku_image(
         ),  # keep alongside other artifacts if requested
     )
 
+    time_after_solver = time.time()
+    solver_duration = time_after_solver - time_after_cnf_write
+
     # 8) Persist textual artifacts / summaries
     summary_txt = summarize_problem(N, blocked, givens)
     with open(os.path.join(out_dir, "problem_summary.txt"), "w", encoding="utf-8") as f:
@@ -100,6 +125,9 @@ def solve_sudoku_image(
 
     with open(os.path.join(out_dir, "solver_stderr.txt"), "w", encoding="utf-8") as f:
         f.write(solve_res.stderr)
+
+    time_after_metadata = time.time()
+    metadata_duration = time_after_metadata - time_after_solver
 
     # 9) If SAT, render solution (warped & original)
     solved_grid_img_path = None
@@ -133,11 +161,33 @@ def solve_sudoku_image(
         solved_on_original_path = os.path.join(out_dir, "solved_on_original.png")
         cv2.imwrite(solved_on_original_path, solved_on_orig)
 
+    time_after_rendering = time.time()
+    rendering_duration = time_after_rendering - time_after_metadata
+
     # 10) Collect debug images if requested
     if save_debug:
         _save_debug_images(dbg_board, out_dir, prefix="board_")
         _save_debug_images(grid.debug, out_dir, prefix="grid_")
         _save_debug_images(ocr_res.debug, out_dir, prefix="ocr_")
+
+
+    time_after_debug = time.time()
+    debug_duration = time_after_debug - time_after_rendering
+
+    if timing_debug:
+        print("[TIMINGS] (seconds)")
+        print(f"  image read:          {image_read_duration:.3f}")
+        print(f"  board detection:     {board_detection_duration:.3f}")
+        print(f"  cell detection:      {cell_detection_duration:.3f}")
+        print(f"  OCR:                 {ocr_duration:.3f}")
+        print(f"  CNF build:           {cnf_build_duration:.3f}")
+        print(f"  CNF write:           {cnf_write_duration:.3f}")
+        print(f"  Solver run:          {solver_duration:.3f}")
+        print(f"  Metadata write:      {metadata_duration:.3f}")
+        print(f"  Rendering solution:  {rendering_duration:.3f}")
+        print(f"  Debug images save:   {debug_duration:.3f}")
+        total_duration = time_after_debug - starttime
+        print(f"  TOTAL:               {total_duration:.3f}")
 
     return {
         "status": str(solve_res.status),
@@ -322,6 +372,7 @@ def main(argv: List[str]) -> int:
             timeout_sec=args.timeout,
             out_dir=args.out,
             save_debug=(not args.no_debug),
+            timing_debug=True,
             keep_solver_files=args.keep_solver_files,
         )
     except Exception as e:

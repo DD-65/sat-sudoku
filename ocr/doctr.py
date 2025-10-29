@@ -5,9 +5,12 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+import torch
 from doctr.models import recognition_predictor
 
 from vision.detect_cells import GridResult, Cell
+
+_model = None
 
 
 # ---------- Public dataclasses ----------
@@ -67,6 +70,24 @@ def _preprocess_for_doctr(img: np.ndarray, size: int = 64, pad: int = 5) -> np.n
 # ---------- Public API ----------
 
 
+def get_model():
+    """
+    Gets the recognition model, loading it if needed.
+    Caches the model in a global variable.
+    """
+    global _model
+    if _model is None:
+        device = "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        _model = recognition_predictor(
+            arch="vitstr_small", pretrained=True#, device=device
+        ).to(device)
+    return _model
+
+
 def ocr_digits_from_grid(
     grid: GridResult, opts: OcrOptions = OcrOptions()
 ) -> OCRGridResult:
@@ -76,7 +97,7 @@ def ocr_digits_from_grid(
     """
     dbg: Dict[str, np.ndarray] = {}
     # Load a RECOGNITION-only predictor
-    model = recognition_predictor(arch="vitstr_small", pretrained=True)
+    model = get_model()
 
     # Preprocess cell images and collect them into a batch
     cell_images = [_preprocess_for_doctr(cell.image) for cell in grid.cells]

@@ -1,0 +1,5 @@
+numpy
+opencv-python
+python-doctr
+torch
+Pillow

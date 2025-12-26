@@ -261,6 +261,8 @@ def _model_to_grid(
     # Build a quick reverse index: (r,c) -> chosen d
     # We iterate through all positives and keep the last one seen; typical models will have exactly one.
     for v in pos_literals:
+        if v > vm.N * vm.N * vm.N:
+            continue  # ignore auxiliary literals
         r, c, d = vm.decode(v)
         if (r, c) in blocked:
             continue

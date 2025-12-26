@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Set
 
-from ocr.doctr import OCRGridResult, OCRCellReading
+from ocr.doctr import OCRGridResult
 
 
 # ---------- Public dataclasses ----------
@@ -84,9 +84,9 @@ class BuildOptions:
     Options for CNF generation.
     """
 
-    # Encoding for "exactly one": we use pairwise by default (simple, fine for N<=16).
-    pairwise_cell_atmost1: bool = True
-    pairwise_rowcolbox_atmost1: bool = True
+    # Encoding for "exactly one" constraints.
+    cell_atmost1_encoding: str = "pairwise"  # "pairwise" | "sequential" | "none"
+    rowcolbox_atmost1_encoding: str = "sequential"  # "pairwise" | "sequential" | "none"
 
     # If True, add negations for blocked cells (not strictly necessary if we skip them elsewhere,
     # but it makes the model explicit).
@@ -131,6 +131,41 @@ def build_sudoku_cnf(
     clauses: List[List[int]] = []
     var_names: Dict[int, str] = {}
 
+    next_var = N * N * N
+
+    def new_aux_var(label: str) -> int:
+        nonlocal next_var
+        next_var += 1
+        if label:
+            var_names[next_var] = label
+        return next_var
+
+    def add_at_most_one(lits: List[int], label: str, encoding: str) -> None:
+        enc = (encoding or "none").lower()
+        if enc == "none" or len(lits) <= 1:
+            return
+        if enc == "pairwise":
+            for i in range(len(lits)):
+                for j in range(i + 1, len(lits)):
+                    clauses.append([-lits[i], -lits[j]])
+            return
+        if enc != "sequential":
+            raise ValueError(f"Unsupported encoding '{encoding}' for at-most-one.")
+
+        aux_vars = [new_aux_var(f"{label}_s{i+1}") for i in range(len(lits) - 1)]
+        # First literal links to first aux
+        clauses.append([-lits[0], aux_vars[0]])
+        # Middle literals
+        for idx in range(1, len(lits) - 1):
+            lit = lits[idx]
+            prev_aux = aux_vars[idx - 1]
+            curr_aux = aux_vars[idx]
+            clauses.append([-lit, curr_aux])
+            clauses.append([-lit, -prev_aux])
+            clauses.append([-prev_aux, curr_aux])
+        # Last literal
+        clauses.append([-lits[-1], -aux_vars[-1]])
+
     # Collect blocked & givens (convert to 1-based)
     blocked: Set[Tuple[int, int]] = set()
     givens: List[Tuple[int, int, int]] = []
@@ -154,56 +189,43 @@ def build_sudoku_cnf(
         for c in range(1, N + 1):
             if (r, c) in blocked:
                 continue
-            # (a) at least one
-            clause = [vm.vid(r, c, d) for d in range(1, N + 1)]
-            clauses.append(clause)
-            # (b) at most one (pairwise)
-            if opts.pairwise_cell_atmost1:
-                for d in range(1, N + 1):
-                    vd = vm.vid(r, c, d)
-                    var_names[vd] = f"X({r},{c})={d}"
-                    for d2 in range(d + 1, N + 1):
-                        clauses.append([-vd, -vm.vid(r, c, d2)])
+            lits = []
+            for d in range(1, N + 1):
+                vd = vm.vid(r, c, d)
+                var_names.setdefault(vd, f"X({r},{c})={d}")
+                lits.append(vd)
+            clauses.append(lits)  # at least one digit
+            add_at_most_one(lits, f"cell_{r}_{c}", opts.cell_atmost1_encoding)
 
     # 2) Row constraints: each digit appears at most once per row
-    if opts.pairwise_rowcolbox_atmost1:
-        for r in range(1, N + 1):
-            for d in range(1, N + 1):
-                # consider only playable cells in the row
-                cols_play = [c for c in range(1, N + 1) if (r, c) not in blocked]
-                for i in range(len(cols_play)):
-                    for j in range(i + 1, len(cols_play)):
-                        c1, c2 = cols_play[i], cols_play[j]
-                        clauses.append([-vm.vid(r, c1, d), -vm.vid(r, c2, d)])
+    for r in range(1, N + 1):
+        for d in range(1, N + 1):
+            cols_play = [c for c in range(1, N + 1) if (r, c) not in blocked]
+            lits = [vm.vid(r, c, d) for c in cols_play]
+            add_at_most_one(lits, f"row_{r}_d{d}", opts.rowcolbox_atmost1_encoding)
 
     # 3) Column constraints: each digit appears at most once per column
-    if opts.pairwise_rowcolbox_atmost1:
-        for c in range(1, N + 1):
-            for d in range(1, N + 1):
-                rows_play = [r for r in range(1, N + 1) if (r, c) not in blocked]
-                for i in range(len(rows_play)):
-                    for j in range(i + 1, len(rows_play)):
-                        r1, r2 = rows_play[i], rows_play[j]
-                        clauses.append([-vm.vid(r1, c, d), -vm.vid(r2, c, d)])
+    for c in range(1, N + 1):
+        for d in range(1, N + 1):
+            rows_play = [r for r in range(1, N + 1) if (r, c) not in blocked]
+            lits = [vm.vid(r, c, d) for r in rows_play]
+            add_at_most_one(lits, f"col_{c}_d{d}", opts.rowcolbox_atmost1_encoding)
 
     # 4) Box constraints: each digit appears at most once per p×q box
     p, q = spec.p, spec.q
-    if opts.pairwise_rowcolbox_atmost1:
-        for br in range(0, N, p):
-            for bc in range(0, N, q):
-                # gather playable cells within this box
-                cells = [
-                    (r, c)
-                    for r in range(br + 1, br + p + 1)
-                    for c in range(bc + 1, bc + q + 1)
-                    if (r, c) not in blocked
-                ]
-                for d in range(1, N + 1):
-                    for i in range(len(cells)):
-                        r1, c1 = cells[i]
-                        for j in range(i + 1, len(cells)):
-                            r2, c2 = cells[j]
-                            clauses.append([-vm.vid(r1, c1, d), -vm.vid(r2, c2, d)])
+    for br in range(0, N, p):
+        for bc in range(0, N, q):
+            cells = [
+                (r, c)
+                for r in range(br + 1, br + p + 1)
+                for c in range(bc + 1, bc + q + 1)
+                if (r, c) not in blocked
+            ]
+            for d in range(1, N + 1):
+                lits = [vm.vid(r, c, d) for (r, c) in cells]
+                add_at_most_one(
+                    lits, f"box_{br//p}_{bc//q}_d{d}", opts.rowcolbox_atmost1_encoding
+                )
 
     # 5) Givens: unit clauses
     for r, c, d in givens:
@@ -216,7 +238,7 @@ def build_sudoku_cnf(
             for d in range(1, N + 1):
                 clauses.append([-vm.vid(r, c, d)])
 
-    cnf = CNF(num_vars=N * N * N, clauses=clauses, var_names=var_names)
+    cnf = CNF(num_vars=next_var, clauses=clauses, var_names=var_names)
     return cnf, spec, blocked, givens
 
 

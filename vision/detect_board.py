@@ -35,7 +35,7 @@ class DetectorOptions:
     approx_eps_fracs: Tuple[float, ...] = (0.02, 0.015, 0.03, 0.01)
 
     # Warp target
-    out_size: int = 1024  # square output (pixels)
+    out_size: int = 896  # square output (pixels)
 
     # Internal downscale for speed (homography is rescaled back automatically)
     max_process_side: int = 1600

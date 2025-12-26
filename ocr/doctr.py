@@ -11,6 +11,7 @@ from doctr.models import recognition_predictor
 from vision.detect_cells import GridResult, Cell
 
 _model = None
+_model_device: Optional[str] = None
 
 
 # ---------- Public dataclasses ----------
@@ -52,18 +53,14 @@ class OcrOptions:
 # ---------- Preprocessing ----------
 
 
-def _preprocess_for_doctr(img: np.ndarray, size: int = 64, pad: int = 5) -> np.ndarray:
-    """
-    Pads and resizes a cell image to a fixed square for consistent OCR.
-    """
-    # 1. Add a white border (padding)
+def _preprocess_for_doctr(img: np.ndarray, size: int = 56, pad: int = 5) -> np.ndarray:
+    """Normalize crops for DocTR: pad, resize, convert BGR→RGB, scale to [0,1]."""
     img = cv2.copyMakeBorder(
         img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(255, 255, 255)
     )
-
-    # 2. Resize to a fixed square
     img = cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
-
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = img.astype("float32") / 255.0
     return img
 
 
@@ -75,16 +72,16 @@ def get_model():
     Gets the recognition model, loading it if needed.
     Caches the model in a global variable.
     """
-    global _model
+    global _model, _model_device
     if _model is None:
         device = "cpu"
         if torch.cuda.is_available():
             device = "cuda"
         elif torch.backends.mps.is_available():
             device = "mps"
-        _model = recognition_predictor(
-            arch="vitstr_small", pretrained=True#, device=device
-        ).to(device)
+        _model = recognition_predictor(arch="vitstr_small", pretrained=True).to(device)
+        _model.eval()
+        _model_device = device
     return _model
 
 
@@ -96,38 +93,71 @@ def ocr_digits_from_grid(
     Classifies each cell as "given", "empty", or "blocked".
     """
     dbg: Dict[str, np.ndarray] = {}
-    # Load a RECOGNITION-only predictor
     model = get_model()
 
-    # Preprocess cell images and collect them into a batch
-    cell_images = [_preprocess_for_doctr(cell.image) for cell in grid.cells]
+    needs_ocr_indices: List[int] = []
+    needs_ocr_crops: List[np.ndarray] = []
+    ocr_cells: List[Optional[OCRCellReading]] = [None] * len(grid.cells)
 
-    # Run recognition on all cell images in a single batch
-    # The model returns a list of (word, confidence) tuples
-    predictions = model(cell_images)
-
-    ocr_cells: List[OCRCellReading] = []
-    for i, cell in enumerate(grid.cells):
-        # The prediction for this cell is at the same index
-        word, confidence = predictions[i]
-        status, digit, conf, raw = _read_single_cell(cell, word, confidence, opts)
-
-        ocr_cells.append(
-            OCRCellReading(
+    for idx, cell in enumerate(grid.cells):
+        s = cell.stats
+        if s.ink_ratio >= opts.blocked_ink_ratio:
+            ocr_cells[idx] = OCRCellReading(
                 row=cell.bbox.row,
                 col=cell.bbox.col,
-                status=status,
-                digit=digit,
-                confid=conf,
-                raw_text=raw,
+                status="blocked",
+                digit=None,
+                confid=-1.0,
+                raw_text="",
             )
-        )
+            continue
+        if s.ink_ratio <= opts.empty_ink_ratio:
+            ocr_cells[idx] = OCRCellReading(
+                row=cell.bbox.row,
+                col=cell.bbox.col,
+                status="empty",
+                digit=None,
+                confid=-1.0,
+                raw_text="",
+            )
+            continue
+        needs_ocr_indices.append(idx)
+        prep = _preprocess_for_doctr(cell.image)
+        needs_ocr_crops.append(prep)
         if opts.collect_debug:
-            dbg[f"r{cell.bbox.row}c{cell.bbox.col}_prep"] = cell_images[i]
+            dbg[f"r{cell.bbox.row}c{cell.bbox.col}_prep"] = prep
 
-    return OCRGridResult(
-        rows=grid.rows, cols=grid.cols, cells=ocr_cells, debug=dbg
-    )
+    predictions: List[Tuple[str, float]] = []
+    if needs_ocr_crops:
+        with torch.no_grad():
+            predictions = model(needs_ocr_crops)
+
+    for idx, pred in zip(needs_ocr_indices, predictions):
+        word, confidence = pred
+        cell = grid.cells[idx]
+        status, digit, conf, raw = _read_single_cell(cell, word, confidence, opts)
+        ocr_cells[idx] = OCRCellReading(
+            row=cell.bbox.row,
+            col=cell.bbox.col,
+            status=status,
+            digit=digit,
+            confid=conf,
+            raw_text=raw,
+        )
+
+    # fill any remaining cells (should not happen but safe)
+    for idx, cell in enumerate(grid.cells):
+        if ocr_cells[idx] is None:
+            ocr_cells[idx] = OCRCellReading(
+                row=cell.bbox.row,
+                col=cell.bbox.col,
+                status="empty",
+                digit=None,
+                confid=-1.0,
+                raw_text="",
+            )
+
+    return OCRGridResult(rows=grid.rows, cols=grid.cols, cells=ocr_cells, debug=dbg)
 
 
 # ---------- Core logic ----------

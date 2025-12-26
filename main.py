@@ -313,10 +313,24 @@ def _project_overlay_back(
 def _save_debug_images(images: dict, out_dir: str, prefix: str = "") -> None:
     if not images:
         return
+
+    def _to_u8(img: np.ndarray) -> np.ndarray:
+        if img.dtype == np.uint8:
+            return img
+        if img.dtype == np.bool_:
+            return (img.astype(np.uint8)) * 255
+        if img.dtype in (np.float32, np.float64):
+            arr = np.nan_to_num(img, nan=0.0, posinf=255.0, neginf=0.0)
+            max_val = arr.max()
+            scale = 255.0 if max_val <= 1.0 else 1.0
+            arr = np.clip(arr * scale, 0.0, 255.0)
+            return arr.astype(np.uint8)
+        return np.clip(img, 0, 255).astype(np.uint8)
+
     for k, im in images.items():
         path = os.path.join(out_dir, f"{prefix}{k}.png")
         try:
-            cv2.imwrite(path, im)
+            cv2.imwrite(path, _to_u8(im))
         except Exception:
             pass
 

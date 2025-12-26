@@ -1,6 +1,6 @@
 # SAT Sudoku Solver
 
-This project is a Sudoku solver that uses a combination of computer vision and a SAT solver to solve Sudoku puzzles from an image.
+This project is a Sudoku solver that uses a combination of computer vision and a SAT solver to solve Sudoku puzzles from an image, in under 500ms.
 
 ## How it works
 

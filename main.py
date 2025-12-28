@@ -393,7 +393,16 @@ def main(argv: List[str]) -> int:
         print(f"[ERROR] {e}", file=sys.stderr)
         return 1
 
-    print(f"Status: {result['status']}")
+    status = result["status"]
+    if status == "SAT":
+        status_note = " (Solve successful)"
+    elif status == "UNSAT":
+        status_note = " (Solve not possible)"
+    elif status == "UNKNOWN":
+        status_note = " (Solve failed)"
+    else:
+        status_note = ""
+    print(f"Status: {status}{status_note}")
     print(f"N={result['N']}  spec={result['spec']}")
     print("Artifacts:")
     for k, v in result["paths"].items():

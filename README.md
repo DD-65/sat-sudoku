@@ -10,6 +10,36 @@ This project is a Sudoku solver that uses a combination of computer vision and a
 4.  SAT-Solving: The Sudoku puzzle is converted into a satisfiability problem ([SAT](https://en.wikipedia.org/wiki/Boolean_satisfiability_problem)) and solved using the Kissat SAT solver.
 5.  Solution Rendering: The sat-compiled solution is rendered back onto the original image.
 
+## Installation
+
+Prerequisites:
+- Python 3 and pip
+- [Kissat SAT solver binary](https://github.com/arminbiere/kissat)
+
+1.  Create and activate a virtual environment (optional but recommended):
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+2.  Install Python dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+3.  [Install Kissat](https://github.com/arminbiere/kissat/releases/latest) and ensure it is on your PATH (or pass `--kissat /path/to/kissat`).
+
+4.  Verify the setup on the sample image:
+
+```bash
+python main.py sudoku.png
+```
+
+Notes:
+- By default, `torch` runs on CPU. For improved performance, ensure it is configured to use CUDA, MPS, or another supported GPU backend.
+
 ## Usage
 
 ### Solve a Sudoku from an image

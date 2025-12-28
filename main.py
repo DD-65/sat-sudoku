@@ -32,6 +32,7 @@ def solve_sudoku_image(
     save_debug: bool = True,
     timing_debug: bool = True,
     keep_solver_files: bool = False,
+    save_artifacts: bool = True,
 ) -> dict:
     """
     pipeline: image -> warped board -> cells -> OCR -> CNF -> Kissat -> solution.
@@ -42,7 +43,8 @@ def solve_sudoku_image(
     if not os.path.exists(image_path):
         raise RuntimeError(f"Image not found: {image_path}")
 
-    os.makedirs(out_dir, exist_ok=True)
+    if save_debug or save_artifacts or keep_solver_files:
+        os.makedirs(out_dir, exist_ok=True)
 
     starttime = time.time()
 
@@ -94,7 +96,10 @@ def solve_sudoku_image(
 
     # 6) Optionally write CNF for inspection
     cnf_path = os.path.join(out_dir, "sudoku.cnf")
-    write_dimacs(cnf, cnf_path)
+    if save_artifacts:
+        write_dimacs(cnf, cnf_path)
+    else:
+        cnf_path = None
 
     time_after_cnf_write = time.time()
     cnf_write_duration = time_after_cnf_write - time_after_cnf
@@ -106,9 +111,9 @@ def solve_sudoku_image(
         blocked,
         kissat_path=kissat_path,
         timeout_sec=timeout_sec,
-        keep_files=keep_solver_files,
+        keep_files=keep_solver_files if save_artifacts else False,
         workdir=(
-            out_dir if keep_solver_files else None
+            out_dir if keep_solver_files and save_artifacts else None
         ),  # keep alongside other artifacts if requested
     )
 
@@ -116,15 +121,18 @@ def solve_sudoku_image(
     solver_duration = time_after_solver - time_after_cnf_write
 
     # 8) Persist textual artifacts / summaries
-    summary_txt = summarize_problem(N, blocked, givens)
-    with open(os.path.join(out_dir, "problem_summary.txt"), "w", encoding="utf-8") as f:
-        f.write(summary_txt + "\n")
+    if save_artifacts:
+        summary_txt = summarize_problem(N, blocked, givens)
+        with open(
+            os.path.join(out_dir, "problem_summary.txt"), "w", encoding="utf-8"
+        ) as f:
+            f.write(summary_txt + "\n")
 
-    with open(os.path.join(out_dir, "solver_stdout.txt"), "w", encoding="utf-8") as f:
-        f.write(solve_res.stdout)
+        with open(os.path.join(out_dir, "solver_stdout.txt"), "w", encoding="utf-8") as f:
+            f.write(solve_res.stdout)
 
-    with open(os.path.join(out_dir, "solver_stderr.txt"), "w", encoding="utf-8") as f:
-        f.write(solve_res.stderr)
+        with open(os.path.join(out_dir, "solver_stderr.txt"), "w", encoding="utf-8") as f:
+            f.write(solve_res.stderr)
 
     time_after_metadata = time.time()
     metadata_duration = time_after_metadata - time_after_solver
@@ -134,7 +142,7 @@ def solve_sudoku_image(
     solved_on_original_path = None
     grid_json_path = None
 
-    if solve_res.status is SAT and solve_res.grid is not None:
+    if save_artifacts and solve_res.status is SAT and solve_res.grid is not None:
         # Save solved grid as JSON
         grid_json_path = os.path.join(out_dir, "solution_grid.json")
         with open(grid_json_path, "w", encoding="utf-8") as f:
@@ -197,13 +205,19 @@ def solve_sudoku_image(
         "givens": sorted(list(givens)),
         "paths": {
             "warped": warped_path if save_debug else None,
-            "cnf": cnf_path,
-            "summary": os.path.join(out_dir, "problem_summary.txt"),
-            "solver_stdout": os.path.join(out_dir, "solver_stdout.txt"),
-            "solver_stderr": os.path.join(out_dir, "solver_stderr.txt"),
-            "solution_grid_json": grid_json_path,
-            "solved_warped": solved_grid_img_path,
-            "solved_on_original": solved_on_original_path,
+            "cnf": cnf_path if save_artifacts else None,
+            "summary": (
+                os.path.join(out_dir, "problem_summary.txt") if save_artifacts else None
+            ),
+            "solver_stdout": (
+                os.path.join(out_dir, "solver_stdout.txt") if save_artifacts else None
+            ),
+            "solver_stderr": (
+                os.path.join(out_dir, "solver_stderr.txt") if save_artifacts else None
+            ),
+            "solution_grid_json": grid_json_path if save_artifacts else None,
+            "solved_warped": solved_grid_img_path if save_artifacts else None,
+            "solved_on_original": solved_on_original_path if save_artifacts else None,
         },
     }
 
@@ -363,7 +377,12 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         help="Solver timeout in seconds (wall clock)",
     )
     ap.add_argument("--out", default="out", help="Output directory for artifacts")
-    ap.add_argument("--no-debug", action="store_true", help="Do not save debug images")
+    ap.add_argument(
+        "--no-debug",
+        "-d",
+        action="store_true",
+        help="Disable debug output, timings, and artifact files",
+    )
     ap.add_argument(
         "--keep-solver-files",
         action="store_true",
@@ -386,8 +405,9 @@ def main(argv: List[str]) -> int:
             timeout_sec=args.timeout,
             out_dir=args.out,
             save_debug=(not args.no_debug),
-            timing_debug=True,
+            timing_debug=(not args.no_debug),
             keep_solver_files=args.keep_solver_files,
+            save_artifacts=(not args.no_debug),
         )
     except Exception as e:
         print(f"[ERROR] {e}", file=sys.stderr)
@@ -403,11 +423,13 @@ def main(argv: List[str]) -> int:
     else:
         status_note = ""
     print(f"Status: {status}{status_note}")
-    print(f"N={result['N']}  spec={result['spec']}")
-    print("Artifacts:")
-    for k, v in result["paths"].items():
-        if v:
-            print(f"  - {k}: {v}")
+
+    if not args.no_debug:
+        print(f"N={result['N']}  spec={result['spec']}")
+        print("Artifacts:")
+        for k, v in result["paths"].items():
+            if v:
+                print(f"  - {k}: {v}")
     return 0
 
 

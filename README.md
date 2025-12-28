@@ -10,6 +10,39 @@ This project is a Sudoku solver that uses a combination of computer vision and a
 4.  SAT-Solving: The Sudoku puzzle is converted into a satisfiability problem ([SAT](https://en.wikipedia.org/wiki/Boolean_satisfiability_problem)) and solved using the Kissat SAT solver.
 5.  Solution Rendering: The sat-compiled solution is rendered back onto the original image.
 
+## Usage
+
+### Solve a Sudoku from an image
+
+```bash
+python main.py path/to/sudoku.png
+```
+
+Common flags:
+- `--kissat kissat` Path to the kissat binary (default: `kissat` in PATH).
+- `--rows 9` Expected row count (default: 9).
+- `--cols 9` Expected column count (default: 9).
+- `--box 3x3` Subgrid size (use `auto` to infer for non-9x9).
+- `--timeout 10` Solver timeout in seconds.
+- `--out out` Output directory for artifacts.
+- `--no-debug` / `-d` Disable debug images, timings, and artifact files.
+- `--keep-solver-files` Keep CNF/model temp files.
+
+Artifacts (when debug is enabled) are written under `--out`:
+- `warped.png`, `sudoku.cnf`, `problem_summary.txt`
+- `solver_stdout.txt`, `solver_stderr.txt`
+- `solution_grid.json`, `solved_warped.png`, `solved_on_original.png`
+
+### Generate a Sudoku puzzle
+
+```bash
+cd generate_sudoku
+python generator.py --difficulty 0.5
+```
+
+- `--difficulty` is a float in `[0, 1]` where higher is harder (default: 0.5).
+- The generator saves the PNG to `generate_sudoku/img/` when run from that folder.
+
 ## Examples
 
 Here's an example of the solver in action:

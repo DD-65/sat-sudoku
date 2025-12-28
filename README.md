@@ -29,9 +29,14 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-3.  [Install Kissat](https://github.com/arminbiere/kissat/releases/latest) and ensure it is on your PATH (or pass `--kissat /path/to/kissat`).
+3. Clone the repository:
+```bash
+git clone https://github.com/DD-65/sat-sudoku && cd sat-sudoku
+```
 
-4.  Verify the setup on the sample image:
+4.  [Install Kissat](https://github.com/arminbiere/kissat/releases/latest) and ensure it is on your PATH (or pass `--kissat /path/to/kissat`).
+
+5.  Verify the setup on the sample image:
 
 ```bash
 python main.py sudoku.png

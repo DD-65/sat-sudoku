@@ -103,4 +103,7 @@ Here's an example of the solver in action:
 ![Output Image](solution.png)
 
 ---
-Also has a Sudoku generation feature using the Algorithm outlined in [this Stack Overflow post](https://stackoverflow.com/a/56581709)
+## Sources
+
+- The Sudoku generation feature uses the Algorithm outlined in [this Stack Overflow post](https://stackoverflow.com/a/56581709)
+- I got the idea for the `--compact-format` flag from another sudoku solver from [bartp5](https://github.com/bartp5/gss)

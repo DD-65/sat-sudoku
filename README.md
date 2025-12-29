@@ -70,7 +70,7 @@ Artifacts (when debug is enabled) are written under `--out`:
 
 ### Solve from a compact Sudoku database
 
-Use `--compact-format` to read multiple puzzles from a single file. Each puzzle is 81 characters (digits), with `0` or `.` as empty cells, and `#` to start a comment until end-of-line. A commonly used sudoku database are a list of minimal sudokus (with only 17 hints) which can be downloaded from http://staffhome.ecm.uwa.edu.au/~00013890/sudokumin.php
+Use `--compact-format` to read multiple puzzles from a single file. Each puzzle is 81 characters (digits), with `0` or `.` as empty cells, and `#` to start a comment until end-of-line. This mode supports only standard 9x9 puzzles with 3x3 subgrids. (A commonly used sudoku database is the list of minimal sudokus (with only 17 hints) which can be downloaded from http://staffhome.ecm.uwa.edu.au/~00013890/sudokumin.php)
 
 ```bash
 python main.py --compact-format path/to/db.txt

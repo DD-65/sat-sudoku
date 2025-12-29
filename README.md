@@ -68,6 +68,18 @@ Artifacts (when debug is enabled) are written under `--out`:
 - `solver_stdout.txt`, `solver_stderr.txt`
 - `solution_grid.json`, `solved_warped.png`, `solved_on_original.png`
 
+### Solve from a compact Sudoku database
+
+Use `--compact-format` to read multiple puzzles from a single file. Each puzzle is 81 characters (digits), with `0` or `.` as empty cells, and `#` to start a comment until end-of-line. A commonly used sudoku database are a list of minimal sudokus (with only 17 hints) which can be downloaded from http://staffhome.ecm.uwa.edu.au/~00013890/sudokumin.php
+
+```bash
+python main.py --compact-format path/to/db.txt
+```
+
+Outputs go to `out/compact` by default:
+- `DB_solved_1.png`, `DB_solved_2.png`, ...
+- Per-puzzle artifacts in `out/compact/db_0001/`, `db_0002/`, etc. (when debug is enabled)
+
 ### Generate a Sudoku puzzle
 
 ```bash

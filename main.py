@@ -222,6 +222,148 @@ def solve_sudoku_image(
     }
 
 
+def solve_sudoku_compact(
+    digits: List[int],
+    *,
+    kissat_path: str = "kissat",
+    box_spec: Optional[Tuple[int, int]] = (3, 3),
+    timeout_sec: Optional[float] = 10.0,
+    out_dir: str = "out",
+    save_debug: bool = True,
+    timing_debug: bool = True,
+    keep_solver_files: bool = False,
+    save_artifacts: bool = True,
+    parse_duration: Optional[float] = None,
+    puzzle_index: int = 1,
+) -> dict:
+    """
+    pipeline: compact digits -> CNF -> Kissat -> solution image.
+    """
+    from compact_format import compact_digits_to_ocr
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    starttime = time.time()
+
+    ocr_res = compact_digits_to_ocr(digits, size=9)
+
+    time_after_parse = time.time()
+
+    cnf, spec, blocked, givens = build_sudoku_cnf(
+        ocr_res, box_spec=box_spec if box_spec else None
+    )
+
+    time_after_cnf = time.time()
+    cnf_build_duration = time_after_cnf - time_after_parse
+
+    puzzle_dir = None
+    if save_artifacts:
+        puzzle_dir = os.path.join(out_dir, f"db_{puzzle_index:04d}")
+        os.makedirs(puzzle_dir, exist_ok=True)
+
+    cnf_path = None
+    if save_artifacts and puzzle_dir:
+        cnf_path = os.path.join(puzzle_dir, "sudoku.cnf")
+        write_dimacs(cnf, cnf_path)
+
+    time_after_cnf_write = time.time()
+    cnf_write_duration = time_after_cnf_write - time_after_cnf
+
+    solve_res: SolveResult = run_kissat_on_cnf(
+        cnf,
+        spec,
+        blocked,
+        kissat_path=kissat_path,
+        timeout_sec=timeout_sec,
+        keep_files=keep_solver_files if save_artifacts else False,
+        workdir=(
+            puzzle_dir if keep_solver_files and save_artifacts and puzzle_dir else None
+        ),
+    )
+
+    time_after_solver = time.time()
+    solver_duration = time_after_solver - time_after_cnf_write
+
+    if save_artifacts and puzzle_dir:
+        summary_txt = summarize_problem(spec.N, blocked, givens)
+        with open(
+            os.path.join(puzzle_dir, "problem_summary.txt"), "w", encoding="utf-8"
+        ) as f:
+            f.write(summary_txt + "\n")
+
+        with open(
+            os.path.join(puzzle_dir, "solver_stdout.txt"), "w", encoding="utf-8"
+        ) as f:
+            f.write(solve_res.stdout)
+
+        with open(
+            os.path.join(puzzle_dir, "solver_stderr.txt"), "w", encoding="utf-8"
+        ) as f:
+            f.write(solve_res.stderr)
+
+    time_after_metadata = time.time()
+    metadata_duration = time_after_metadata - time_after_solver
+
+    solved_image_path = None
+    grid_json_path = None
+
+    if solve_res.status is SAT and solve_res.grid is not None:
+        solved_image_path = os.path.join(out_dir, f"DB_solved_{puzzle_index}.png")
+        _render_solution_grid_image(solve_res.grid, solved_image_path)
+
+        if save_artifacts and puzzle_dir:
+            grid_json_path = os.path.join(puzzle_dir, "solution_grid.json")
+            with open(grid_json_path, "w", encoding="utf-8") as f:
+                json.dump(solve_res.grid, f, indent=2)
+
+    time_after_render = time.time()
+    render_duration = time_after_render - time_after_metadata
+
+    if timing_debug:
+        label = f"[TIMINGS] (seconds) puzzle {puzzle_index}"
+        print(label)
+        if parse_duration is not None:
+            print(f"  parse:              {parse_duration:.3f}")
+        print(f"  CNF build:          {cnf_build_duration:.3f}")
+        print(f"  CNF write:          {cnf_write_duration:.3f}")
+        print(f"  Solver run:         {solver_duration:.3f}")
+        print(f"  Metadata write:     {metadata_duration:.3f}")
+        print(f"  Rendering solution: {render_duration:.3f}")
+        total_duration = time_after_render - starttime
+        if parse_duration is not None:
+            total_duration += parse_duration
+        print(f"  TOTAL:              {total_duration:.3f}")
+
+    return {
+        "status": str(solve_res.status),
+        "N": 9,
+        "spec": {"N": spec.N, "p": spec.p, "q": spec.q},
+        "blocked": sorted(list(blocked)),
+        "givens": sorted(list(givens)),
+        "paths": {
+            "cnf": cnf_path,
+            "summary": (
+                os.path.join(puzzle_dir, "problem_summary.txt")
+                if save_artifacts and puzzle_dir
+                else None
+            ),
+            "solver_stdout": (
+                os.path.join(puzzle_dir, "solver_stdout.txt")
+                if save_artifacts and puzzle_dir
+                else None
+            ),
+            "solver_stderr": (
+                os.path.join(puzzle_dir, "solver_stderr.txt")
+                if save_artifacts and puzzle_dir
+                else None
+            ),
+            "solution_grid_json": grid_json_path,
+            "solved_image": solved_image_path,
+            "artifact_dir": puzzle_dir,
+        },
+    }
+
+
 # ---------------- Visualization helpers ----------------
 
 
@@ -349,14 +491,82 @@ def _save_debug_images(images: dict, out_dir: str, prefix: str = "") -> None:
             pass
 
 
+def _render_solution_grid_image(
+    grid: List[List[Optional[int]]], output_path: str
+) -> None:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError as exc:
+        raise RuntimeError("Pillow is required to render compact solutions.") from exc
+
+    size = len(grid)
+    base = int(round(size ** 0.5))
+    if base * base != size:
+        raise RuntimeError(f"Unsupported grid size for rendering: {size}")
+
+    cell_size = 50
+    margin = 20
+    img_size = size * cell_size + 2 * margin
+
+    img = Image.new("RGB", (img_size, img_size), "white")
+    draw = ImageDraw.Draw(img)
+
+    font = None
+    for font_path in (
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+    ):
+        try:
+            font = ImageFont.truetype(font_path, int(cell_size * 0.8))
+            break
+        except OSError:
+            continue
+    if font is None:
+        font = ImageFont.load_default()
+
+    for i in range(size + 1):
+        line_width = 3 if i % base == 0 else 1
+        draw.line(
+            [(margin + i * cell_size, margin), (margin + i * cell_size, img_size - margin)],
+            fill="black",
+            width=line_width,
+        )
+        draw.line(
+            [(margin, margin + i * cell_size), (img_size - margin, margin + i * cell_size)],
+            fill="black",
+            width=line_width,
+        )
+
+    for r in range(size):
+        for c in range(size):
+            val = grid[r][c]
+            if val is None or val == 0:
+                continue
+            text = str(val)
+            bbox = draw.textbbox((0, 0), text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            x = margin + c * cell_size + (cell_size - text_width) / 2
+            y = margin + r * cell_size + (cell_size - text_height) / 2 - bbox[1]
+            draw.text((x, y), text, fill="black", font=font)
+
+    img.save(output_path)
+
+
 # ---------------- CLI ----------------
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
-        description="Solve a Sudoku from an image using OCR + Kissat SAT solver."
+        description="Solve a Sudoku from an image or a compact database file using Kissat."
     )
-    ap.add_argument("image", help="Path to Sudoku photo")
+    ap.add_argument(
+        "image",
+        help=(
+            "Path to Sudoku photo, or a compact-format database file when "
+            "--compact-format is set"
+        ),
+    )
     ap.add_argument(
         "--kissat",
         default="kissat",
@@ -369,6 +579,15 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         type=str,
         default="3x3",
         help="Subgrid size p×q, e.g., '3x3' (use 'auto' to auto-factor)",
+    )
+    ap.add_argument(
+        "--compact-format",
+        "-c",
+        action="store_true",
+        help=(
+            "Read a compact Sudoku database file: 81 digits per puzzle, "
+            "0 or . for empty, and # for line comments"
+        ),
     )
     ap.add_argument(
         "--timeout",
@@ -391,11 +610,103 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
+def _solve_compact_db(args: argparse.Namespace, box_spec: Optional[Tuple[int, int]]) -> int:
+    from compact_format import CompactSudokuReader
+
+    if args.rows != 9 or args.cols != 9:
+        raise RuntimeError("--compact-format supports only standard 9x9 sudokus")
+    if box_spec not in (None, (3, 3)):
+        raise RuntimeError("--compact-format supports only 3x3 subgrids")
+    if not os.path.exists(args.image):
+        raise RuntimeError(f"Database file not found: {args.image}")
+
+    base_out = os.path.join(args.out, "compact")
+    os.makedirs(base_out, exist_ok=True)
+
+    processed = 0
+    solved = 0
+    unsat = 0
+    unknown = 0
+    invalid = 0
+
+    with CompactSudokuReader(args.image, size=9) as reader:
+        while True:
+            parse_start = time.time()
+            digits = reader.read_next()
+            parse_duration = time.time() - parse_start
+            if digits is None:
+                break
+
+            processed += 1
+            try:
+                result = solve_sudoku_compact(
+                    digits,
+                    kissat_path=args.kissat,
+                    box_spec=box_spec,
+                    timeout_sec=args.timeout,
+                    out_dir=base_out,
+                    save_debug=(not args.no_debug),
+                    timing_debug=(not args.no_debug),
+                    keep_solver_files=args.keep_solver_files,
+                    save_artifacts=(not args.no_debug),
+                    parse_duration=parse_duration,
+                    puzzle_index=processed,
+                )
+            except FileNotFoundError as exc:
+                print(f"[ERROR] {exc}", file=sys.stderr)
+                return 1
+            except Exception as exc:
+                invalid += 1
+                print(f"[ERROR] puzzle {processed}: {exc}", file=sys.stderr)
+                continue
+
+            status = result["status"]
+            if status == "SAT":
+                solved += 1
+                status_note = " (Solve successful)"
+            elif status == "UNSAT":
+                unsat += 1
+                status_note = " (Solve not possible)"
+            elif status == "UNKNOWN":
+                unknown += 1
+                status_note = " (Solve failed)"
+            else:
+                status_note = ""
+
+            print(f"Puzzle {processed} Status: {status}{status_note}")
+            solved_image = result["paths"].get("solved_image")
+            if solved_image:
+                print(f"  Solved image: {solved_image}")
+
+            if not args.no_debug:
+                print(f"  N={result['N']}  spec={result['spec']}")
+                print("  Artifacts:")
+                for k, v in result["paths"].items():
+                    if v and k != "solved_image":
+                        print(f"    - {k}: {v}")
+
+    if processed == 0:
+        print("[ERROR] No puzzles found in compact database.", file=sys.stderr)
+        return 1
+
+    if not args.no_debug:
+        print("Summary:")
+        print(f"  puzzles:  {processed}")
+        print(f"  solved:   {solved}")
+        print(f"  unsat:    {unsat}")
+        print(f"  unknown:  {unknown}")
+        print(f"  invalid:  {invalid}")
+
+    return 0
+
+
 def main(argv: List[str]) -> int:
     args = parse_args(argv)
     box_spec = None if args.box.lower() == "auto" else _parse_box_spec(args.box)
 
     try:
+        if args.compact_format:
+            return _solve_compact_db(args, box_spec)
         result = solve_sudoku_image(
             args.image,
             kissat_path=args.kissat,

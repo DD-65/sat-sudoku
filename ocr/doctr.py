@@ -80,8 +80,10 @@ def get_model():
         elif torch.backends.mps.is_available():
             device = "mps"
         _model = recognition_predictor(arch="vitstr_small", pretrained=True).to(device)
+        #_model = recognition_predictor(arch="crnn_mobilenet_v3_small", pretrained=True).to(device)
         _model.eval()
         _model_device = device
+        #_model.model = torch.compile(_model.model)
     return _model
 
 
@@ -128,9 +130,13 @@ def ocr_digits_from_grid(
             dbg[f"r{cell.bbox.row}c{cell.bbox.col}_prep"] = prep
 
     predictions: List[Tuple[str, float]] = []
+    # chunking: run in batches for approx .2s faster ocr (on larger grids)
     if needs_ocr_crops:
         with torch.no_grad():
-            predictions = model(needs_ocr_crops)
+            bs = 32  # seems to be the best out of 8, 16, 32
+            for i in range(0, len(needs_ocr_crops), bs):
+                chunk = needs_ocr_crops[i:i+bs]
+                predictions.extend(model(chunk))
 
     for idx, pred in zip(needs_ocr_indices, predictions):
         word, confidence = pred

@@ -86,7 +86,7 @@ def detect_cells(
 ) -> GridResult:
     """
     Given a top-down, square Sudoku board (e.g., 1024x1024 BGR) from detect_board,
-    find the r×c grid and return per-cell crops with simple stats.
+    find the r*c grid and return per-cell crops with simple stats.
 
     Returns:
         GridResult with rows, cols, per-cell Cell (bbox+image+stats), grid lines, and debug images.

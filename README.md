@@ -53,7 +53,7 @@ Notes:
 python main.py path/to/sudoku.png
 ```
 
-Common flags:
+Flags:
 - `--kissat kissat` Path to the kissat binary (default: `kissat` in PATH).
 - `--rows 9` Expected row count (default: 9).
 - `--cols 9` Expected column count (default: 9).

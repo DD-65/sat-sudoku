@@ -16,11 +16,11 @@ Prerequisites:
 - Python 3 and pip
 - [Kissat SAT solver binary](https://github.com/arminbiere/kissat)
 
-1.  Create and activate a virtual environment (optional but recommended):
+1.  Create & activate a virtual environment (optional but recommended):
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+conda create -n sat-sudoku -y python=3.13
+conda activate sat-sudoku
 ```
 
 2.  Install Python dependencies:

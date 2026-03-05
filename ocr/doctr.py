@@ -53,15 +53,75 @@ class OcrOptions:
 # ---------- Preprocessing ----------
 
 
-def _preprocess_for_doctr(img: np.ndarray, size: int = 56, pad: int = 5) -> np.ndarray:
-    """Normalize crops for DocTR: pad, resize, convert BGR→RGB, scale to [0,1]."""
-    img = cv2.copyMakeBorder(
-        img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(255, 255, 255)
+def _largest_connected_component(mask: np.ndarray) -> np.ndarray:
+    """Keep only the largest foreground component in a binary mask."""
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    if num_labels <= 1:
+        return mask
+
+    largest_idx = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    component = np.zeros_like(mask)
+    component[labels == largest_idx] = 255
+    return component
+
+
+def _preprocess_for_doctr(
+    img: np.ndarray,
+    size: int = 32,
+    inner_margin_frac: float = 0.12,
+    pad_frac: float = 0.2,
+) -> np.ndarray:
+    """
+    Normalize a cell crop for OCR by isolating the digit, centering it on a square
+    canvas, then converting to DocTR's expected RGB float image format.
+    """
+    h, w = img.shape[:2]
+    margin_y = min(max(0, int(round(h * inner_margin_frac))), max(0, h // 2 - 1))
+    margin_x = min(max(0, int(round(w * inner_margin_frac))), max(0, w // 2 - 1))
+    cropped = img[margin_y : h - margin_y, margin_x : w - margin_x]
+    if cropped.size == 0:
+        cropped = img
+
+    gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+
+    # Digits are darker than the background, so we invert after Otsu thresholding.
+    _, mask = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    # Remove tiny specks before selecting the dominant glyph-like component.
+    mask = cv2.morphologyEx(
+        mask,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)),
+        iterations=1,
     )
-    img = cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = img.astype("float32") / 255.0
-    return img
+
+    if cv2.countNonZero(mask) > 0:
+        mask = _largest_connected_component(mask)
+        ys, xs = np.where(mask > 0)
+        y0, y1 = ys.min(), ys.max() + 1
+        x0, x1 = xs.min(), xs.max() + 1
+        glyph = mask[y0:y1, x0:x1]
+    else:
+        glyph = mask
+
+    canvas = np.full((size, size), 255, dtype=np.uint8)
+    if glyph.size > 0 and cv2.countNonZero(glyph) > 0:
+        gh, gw = glyph.shape[:2]
+        content_size = max(1, int(round(size * (1.0 - 2.0 * pad_frac))))
+        scale = content_size / max(gh, gw)
+        new_w = max(1, int(round(gw * scale)))
+        new_h = max(1, int(round(gh * scale)))
+        interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        resized = cv2.resize(glyph, (new_w, new_h), interpolation=interpolation)
+
+        y_off = (size - new_h) // 2
+        x_off = (size - new_w) // 2
+        canvas[y_off : y_off + new_h, x_off : x_off + new_w] = 255 - resized
+
+    rgb = cv2.cvtColor(canvas, cv2.COLOR_GRAY2RGB)
+    rgb = rgb.astype("float32") / 255.0
+    return rgb
 
 
 # ---------- Public API ----------

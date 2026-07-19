@@ -13,7 +13,8 @@ import numpy as np
 from vision.detect_board import detect_board, DetectorOptions
 from vision.detect_cells import detect_cells, GridOptions, GridResult
 from ocr.doctr import ocr_digits_from_grid, OcrOptions, OCRGridResult
-from sat.builder import build_sudoku_cnf, write_dimacs, summarize_problem, SudokuSpec
+#from ocr.digit_classifier import ocr_digits_from_grid, OcrOptions, OCRGridResult
+from sat.builder import build_sudoku_cnf, write_dimacs, summarize_problem#, SudokuSpec
 from sat.runner import run_kissat_on_cnf, SAT, SolveResult
 
 
